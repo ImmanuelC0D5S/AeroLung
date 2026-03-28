@@ -1,0 +1,43 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# OS-specific files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Environment variables
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Build artifacts
+dist/
+build/
+*.bin
+*.exe
+
+# Dependencies
+node_modules/
+jspm_packages/
+venv/
+env/
+.venv/
+
+# IDE files
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Project specific
+frontend/node_modules/
+models/*.joblib
+data/uploaded_temp.wav
+data/temp_*
+C:\Users\imman\.gemini\antigravity/
+C:\Users\imman\.gemini\antigravity\*

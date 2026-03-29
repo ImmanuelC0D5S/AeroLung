@@ -39,19 +39,21 @@ def apply_bandpass_filter(data, fs, lowcut=200.0, highcut=2000.0, order=4):
     filtered_data = filtfilt(b, a, data)
     return filtered_data
 
-def perform_spectral_analysis(data, fs):
+def perform_spectral_analysis(data, fs, n_fft=2048):
     """
     # [EXPERIMENT 2]
-    Implement a function for Spectral Analysis using np.fft.rfft 
-    to find "Wheeze" peaks.
+    Implement an academic-grade Spectral Analysis using N-point FFT 
+    and Hamming Windowing to minimize spectral leakage.
     """
-    n = len(data)
-    rfft_result = np.fft.rfft(data)
-    freqs = np.fft.rfftfreq(n, d=1/fs)
+    # Apply Hamming Window [Exp 2 Core Requirement]
+    window = np.hamming(len(data))
+    windowed_data = data * window
+    
+    # Compute N-point rFFT for consistent frequency resolution
+    rfft_result = np.fft.rfft(windowed_data, n=n_fft)
+    freqs = np.fft.rfftfreq(n_fft, d=1/fs)
     magnitude = np.abs(rfft_result)
     
-    # Simple peak finding logic for wheeze detection (high frequency components)
-    # In a real scenario, this would be more complex.
     return freqs, magnitude
 
 def simulate_quantization(data, bits=16):

@@ -7,6 +7,7 @@
   --color-neon-cyan: #00f2ff;
   --color-electric-lime: #adff2f;
   --color-vibrant-magenta: #ff00ff;
+  --color-neon-yellow: #faff00;
   --color-terminal-gray: #1a1a1a;
   
   --font-sans: "Inter", ui-sans-serif, system-ui;
@@ -56,6 +57,10 @@ body {
 
 .glow-magenta {
   filter: drop-shadow(0 0 4px var(--color-vibrant-magenta));
+}
+
+.glow-yellow {
+  filter: drop-shadow(0 0 4px var(--color-neon-yellow));
 }
 
 .glow-white {
@@ -132,4 +137,33 @@ input[type="range"]::-webkit-slider-thumb {
   margin-top: -4px;
   border-radius: 0;
   box-shadow: 0 0 5px var(--color-neon-cyan);
+}
+
+/* OSCILLOSCOPE GRID */
+.oscilloscope-grid {
+  background-image: 
+    linear-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
+  background-size: 20px 20px;
+}
+
+.viva-badge {
+  font-size: 7px;
+  font-weight: bold;
+  text-transform: uppercase;
+  padding: 2px 6px;
+  border-radius: 2px;
+  letter-spacing: 0.1em;
+}
+
+.badge-green {
+  background: rgba(57, 255, 20, 0.1);
+  color: #39FF14;
+  border: 1px solid rgba(57, 255, 20, 0.3);
+}
+
+.badge-magenta {
+  background: rgba(255, 0, 255, 0.1);
+  color: #FF00FF;
+  border: 1px solid rgba(255, 0, 255, 0.3);
 }

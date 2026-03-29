@@ -150,3 +150,28 @@ def check_lung_health(data, fs, mfcc_features, crackles_count):
     
     # Placeholder for model-based prediction
     return "HEALTHY (Heuristic)"
+
+def get_dsp_metrics(data, fs):
+    """
+    Extract expert DSP metrics for the Technical Inspector mode.
+    [EXPERIMENT 3 / TECHNICAL PROOF]
+    """
+    # 1. Spectral Centroid
+    centroid = librosa.feature.spectral_centroid(y=data, sr=fs)[0]
+    # 2. RMS Energy
+    rms = librosa.feature.rms(y=data)[0]
+    # 3. Zero Crossing Rate
+    zcr = librosa.feature.zero_crossing_rate(y=data)[0]
+    # 4. Spectral Rolloff
+    rolloff = librosa.feature.spectral_rolloff(y=data, sr=fs)[0]
+    # 5. Spectral Flatness
+    flatness = librosa.feature.spectral_flatness(y=data)[0]
+    
+    return {
+        "Spectral Centroid (Hz)": float(np.mean(centroid)),
+        "RMS Energy (a.u.)": float(np.mean(rms)),
+        "Zero Crossing Rate": float(np.mean(zcr)),
+        "Spectral Rolloff (Hz)": float(np.mean(rolloff)),
+        "Spectral Flatness": float(np.mean(flatness))
+    }
+

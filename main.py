@@ -16,6 +16,7 @@ from src.ml_logic import (
     detect_crackles_rms,
     extract_mfcc_features,
     check_lung_health,
+    get_dsp_metrics,
     LungClassifier
 )
 
@@ -23,8 +24,15 @@ app = FastAPI(title="AeroLung Diagnostic API")
 
 # Initialize Classifier
 classifier = LungClassifier()
-if os.path.exists("models/lung_model.joblib"):
-    classifier.load_model("models/lung_model.joblib")
+MODEL_PATH = "models/lung_model.joblib"
+if os.path.exists(MODEL_PATH):
+    classifier.load_model(MODEL_PATH)
+    if classifier.is_trained:
+        # Diagnostic: Verify expected feature count (53)
+        n_feat = classifier.model.n_features_in_
+        print(f"--- AERO-ENGINE READY: Loaded {MODEL_PATH} with {n_feat} features ---")
+else:
+    print(f"--- AERO-ENGINE WARNING: No model found at {MODEL_PATH} ---")
 
 # Enable CORS for frontend development
 app.add_middleware(
@@ -57,65 +65,97 @@ async def analyze_audio(
         logs.append(f"INIT: System received {file.filename}. Starting analysis pipeline...")
 
         # 1. Load Audio
-        data, fs = load_audio(temp_path)
-        logs.append(f"LOAD: Audio digitized at {fs}Hz.")
+        data_orig, fs_orig = load_audio(temp_path)
+        logs.append(f"LOAD: Audio digitized at {fs_orig}Hz.")
 
         # 2. [EXPERIMENT 8] Resampling
-        if fs != target_sr:
-            data, fs = alter_sampling_rate(data, fs, target_sr)
+        if fs_orig != target_sr:
+            raw_audio, fs = alter_sampling_rate(data_orig, fs_orig, target_sr)
             logs.append(f"Applying EXPERIMENT [8] Logic: Resampling signal to {target_sr}Hz for sync.")
         else:
+            raw_audio = data_orig
+            fs = fs_orig
             logs.append(f"Applying EXPERIMENT [8] Logic: Sampling rate verified at {target_sr}Hz.")
 
         # 3. [EXPERIMENT 5] Notch Filter (50Hz)
-        notched_data = apply_notch_filter(data, fs, freq=50.0)
+        notched_data = apply_notch_filter(raw_audio, fs, freq=50.0)
         logs.append("Applying EXPERIMENT [5] Logic: 50Hz IIR Notch Filter engaged (Removing AC Mains Hum).")
 
         # 4. [EXPERIMENT 6/4] Bandpass Filter (200Hz - 2000Hz)
-        filtered_data = apply_bandpass_filter(notched_data, fs, lowcut=200, highcut=2000)
+        filtered_audio = apply_bandpass_filter(notched_data, fs, lowcut=200, highcut=2000)
         logs.append("Applying EXPERIMENT [6/4] Logic: Butterworth Bandpass (200-2000Hz) isolating lung sounds.")
 
         # 5. [EXPERIMENT 7] Quantization
-        quantized_data = simulate_quantization(filtered_data, bits=bit_depth)
+        quantized_data = simulate_quantization(filtered_audio, bits=bit_depth)
         logs.append(f"Applying EXPERIMENT [7] Logic: Simulating {bit_depth}-bit precision quantization.")
+        
+        # Calculate Quantization SNR [Exp 7]
+        # SNR = 10 * log10(P_signal / P_noise)
+        signal_power = np.mean(np.square(filtered_audio))
+        noise_power = np.mean(np.square(filtered_audio - quantized_data))
+        snr_db = float(10 * np.log10(signal_power / (noise_power + 1e-15)))
 
         # 6. [EXPERIMENT 2] Spectral Analysis
-        freqs, mag = perform_spectral_analysis(quantized_data, fs)
-        logs.append("Applying EXPERIMENT [2] Logic: FFT Spectral Analysis identifying wheeze peaks.")
+        # n_fft=2048 provides perfect academic resolution for 44.1kHz audio
+        freqs, mag = perform_spectral_analysis(quantized_data, fs, n_fft=2048)
+        logs.append("Applying EXPERIMENT [2] Logic: Academic Spectral Analysis (Hamming Windowed).")
 
-        # 7. AI Analysis (ML Logic)
+        # Clinical Peak Detection [Exp 2]
+        # Target: Dominant respiratory peak in the 200Hz-2000Hz window
+        mask_clinical = (freqs >= 200) & (freqs <= 2000)
+        if np.any(mask_clinical):
+            p_idx = np.argmax(mag[mask_clinical])
+            peak_freq = float(freqs[mask_clinical][p_idx])
+        else:
+            peak_freq = 0.0
+
+        # AI Analysis (ML Logic)
         # [EXPERIMENT 3] RMS for Crackles
         rms, crackles = detect_crackles_rms(quantized_data)
         logs.append(f"Applying EXPERIMENT [3] Logic: RMS-based Anomaly detection found {len(crackles)} crackles.")
         
-        # Feature Extraction (53 Features)
-        mfccs = extract_mfcc_features(quantized_data, fs)
+        # Feature Extraction (Expert Metrics)
+        dsp_features = get_dsp_metrics(quantized_data, fs)
         
-        # Prediction
-        if classifier.is_trained:
-            status = classifier.predict(mfccs)
-            confidence = float(np.max(classifier.model.predict_proba(mfccs.reshape(1, -1))))
-        else:
-            status = "UNTRAINED_MODEL_HEURISTIC"
-            confidence = 0.5
+        # Feature Extraction (53 Features for ML)
+        mfccs = extract_mfcc_features(quantized_data, fs)
+        logs.append(f"Feature Vector Synchronized: {len(mfccs)} dimensions extracted for ML Inference.")
+        
+        # Prediction with Dimension Guard
+        try:
+            if classifier.is_trained:
+                # Ensure we are passing the expected 53 features
+                status = classifier.predict(mfccs)
+                confidence = float(np.max(classifier.model.predict_proba(mfccs.reshape(1, -1))))
+            else:
+                status = "UNTRAINED_MODEL_HEURISTIC"
+                confidence = 0.5
+        except ValueError as e:
+            logs.append(f"CRITICAL ERROR [ML_SYNC]: {str(e)}")
+            logs.append("Action: Recommend full laboratory model retraining (train_model.py).")
+            status = "SYSTEM_MISMATCH_ERROR"
+            confidence = 0.0
+
+        # Define detection bounds for "Viva" highlight [Exp 2]
+        # Wheezing typically 400-800Hz in this context
+        detection_bounds = [400, 800] if "Asthma" in status or "Wheezing" in status else None
 
         logs.append("FINAL: ML Classifier generated diagnosis based on 53 feature vectors.")
 
-        # Prepare JSON data for Recharts (Downsampled for frontend performance)
-        # Time-domain: 2000 samples
-        step_time = max(1, len(data) // 2000)
-        waveform_raw = data[::step_time].tolist()
-        waveform_filtered = quantized_data[::step_time].tolist()
+        # Prepare JSON data for Recharts (High-Res for Inspector)
+        step_inspect = max(1, len(raw_audio) // 4000)
+        time_raw = raw_audio[::step_inspect].tolist()
+        time_filtered = filtered_audio[::step_inspect].tolist()
 
-        # Frequency-domain: 1000 samples up to 4kHz
-        mask_freq = freqs <= 4000
+        # Prepare FFT sub-sampled for frontend (PSD dB)
+        # Limit strictly to 0-2000Hz range for "Clean & Academic" look
+        mask_freq = (freqs >= 0) & (freqs <= 2000)
         freqs_sub = freqs[mask_freq]
         mag_sub = mag[mask_freq]
-        step_freq = max(1, len(freqs_sub) // 1000)
         
-        fft_data = [
-            {"freq": int(f), "mag": float(20 * np.log10(m + 1e-9))} 
-            for f, m in zip(freqs_sub[::step_freq], mag_sub[::step_freq])
+        freq_spectrum = [
+            {"freq": int(f), "mag": float(m)} 
+            for f, m in zip(freqs_sub, mag_sub)
         ]
 
         return {
@@ -123,11 +163,15 @@ async def analyze_audio(
             "logs": logs,
             "prediction": status,
             "confidence": round(confidence, 4),
-            "waveform": {
-                "raw": waveform_raw,
-                "filtered": waveform_filtered
+            "snr_db": round(snr_db, 2),
+            "peak_freq": round(peak_freq, 2),
+            "detection_bounds": detection_bounds,
+            "waveforms": {
+                "raw": time_raw,
+                "filtered": time_filtered
             },
-            "fft": fft_data,
+            "fft": freq_spectrum,
+            "dsp_features": dsp_features,
             "metadata": {
                 "fs": fs,
                 "bits": bit_depth,

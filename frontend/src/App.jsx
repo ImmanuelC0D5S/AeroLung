@@ -92,25 +92,27 @@ const InspectorPanel = ({ isOpen, onClose, data }) => {
             <div className="space-y-4">
                <div className="flex justify-between items-baseline">
                  <h3 className="text-[10px] font-bold uppercase tracking-widest opacity-60">Spectral Content [EXP 2]</h3>
-                 <span className="text-[8px] bg-white/5 px-2 py-0.5 rounded opacity-40">Highlighted Bands</span>
+                 <span className="text-[8px] bg-white/5 px-2 py-0.5 rounded opacity-40">Linear Magnitude Peaks</span>
                </div>
                <div className="h-[220px] bg-black/40 border border-white/5 rounded p-4 pr-8 relative">
-                 <div className="absolute top-1 right-2 text-[6px] uppercase opacity-20">Logarithmic Scale (dB)</div>
+                 <div className="absolute top-1 right-2 text-[6px] uppercase opacity-20">Linear Magnitude Spectrum</div>
                  <ResponsiveContainer width="100%" height="100%">
                    <AreaChart data={data.fft}>
-                     <XAxis dataKey="freq" hide />
-                     <YAxis hide domain={[-100, 20]} />
+                     <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.02)" vertical={false} />
+                     <XAxis dataKey="freq" hide={false} stroke="#ffffff20" fontSize={6} tick={{fontFamily: 'JetBrains Mono'}} />
+                     <YAxis hide={false} stroke="#ffffff20" fontSize={6} domain={[0, 'auto']} />
                      <Tooltip contentStyle={{ backgroundColor: '#000', border: '1px solid #333', fontSize: '8px' }} />
                      {/* Highlight Wheeze/Crackle zone (Example: 400-1600Hz) */}
                      {data.detection_bounds && (
-                        <ReferenceArea x1={data.detection_bounds[0]} x2={data.detection_bounds[1]} fill="#faff0005" strokeOpacity={0.1} />
+                        <ReferenceArea x1={data.detection_bounds[0]} x2={data.detection_bounds[1]} fill="#faff0010" strokeOpacity={0.1} />
                      )}
-                     <Area type="monotone" dataKey="mag" stroke="#ff00ff" fill="#ff00ff10" strokeWidth={1.5} dot={false} isAnimationActive={false} />
+                     <Area type="monotone" dataKey="mag" stroke="#ff00ff" fill="#ff00ff15" strokeWidth={1.5} dot={false} isAnimationActive={false} />
                    </AreaChart>
                  </ResponsiveContainer>
                </div>
-               <div className="flex gap-4 text-[7px] opacity-50 uppercase tracking-widest">
-                 <div className="flex items-center gap-1"><div className="w-1 h-1 bg-neon-yellow" /> Detected Range</div>
+               <div className="flex justify-between text-[7px] opacity-50 uppercase tracking-widest">
+                 <div className="flex items-center gap-1"><div className="w-1 h-1 bg-neon-yellow" /> Diagnostic Band</div>
+                 <span>X-Axis: Frequency (Hz) | Y-Axis: Mag</span>
                </div>
             </div>
 
@@ -165,6 +167,8 @@ const App = () => {
   const [logs, setLogs] = useState([]);
   const [isDragging, setIsDragging] = useState(false);
   const [showInspector, setShowInspector] = useState(false);
+  const [gainDb, setGainDb] = useState(0);
+  const [autoGain, setAutoGain] = useState(false);
 
   // --- REFS ---
   const logEndRef = useRef(null);
@@ -185,6 +189,8 @@ const App = () => {
     formData.append('file', selectedFile);
     formData.append('bit_depth', bitDepth);
     formData.append('target_sr', targetSR);
+    formData.append('gain_db', gainDb);
+    formData.append('auto_gain', autoGain);
 
     try {
       const response = await fetch('http://localhost:8000/analyze', {
@@ -352,6 +358,33 @@ const App = () => {
                    ))}
                 </div>
               </div>
+              
+              <div className="space-y-4 border-t border-white/5 pt-4">
+                 <div>
+                    <div className="flex justify-between items-center mb-2">
+                      <span className="text-[8px] uppercase tracking-wider opacity-40">Laboratory Pre-Amp</span>
+                      <span className="text-[9px] text-neon-cyan font-bold">{gainDb} dB</span>
+                    </div>
+                    <input 
+                      type="range" 
+                      min="0" 
+                      max="20" 
+                      value={gainDb}
+                      onChange={(e) => setGainDb(parseInt(e.target.value))}
+                      className="w-full accent-neon-cyan opacity-60"
+                    />
+                 </div>
+                 
+                 <div className="flex justify-between items-center">
+                    <span className="text-[8px] uppercase tracking-wider opacity-40">Auto Gain (AGC)</span>
+                    <button 
+                      onClick={() => setAutoGain(!autoGain)}
+                      className={`w-8 h-4 rounded-full transition-all relative ${autoGain ? 'bg-neon-cyan' : 'bg-white/10'}`}
+                    >
+                      <div className={`absolute top-0.5 w-3 h-3 rounded-full bg-white transition-all ${autoGain ? 'left-4.5' : 'left-0.5'}`} />
+                    </button>
+                 </div>
+              </div>
             </div>
           </div>
 
@@ -480,15 +513,17 @@ const App = () => {
              <div className="flex-1 flex flex-col justify-center">
                 {result ? (
                   <motion.div 
-                    initial={{ opacity: 0, scale: 0.95 }} 
-                    animate={{ opacity: 1, scale: 1 }} 
+                    initial={{ opacity: 0, y: 10 }} 
+                    animate={{ opacity: 1, y: 0 }} 
                     className="text-center"
                   >
-                    <span className="text-[8px] uppercase tracking-[0.4em] opacity-40 block mb-2">Analysis Complete</span>
-                    <h3 className="text-xl font-bold uppercase tracking-tighter text-electric-lime mb-3 glow-lime">
-                      {result.prediction.replace('Diagnosis: ', '').replace('Condition: ', '')}
+                    <span className="text-[7px] text-neon-cyan font-bold uppercase tracking-[0.4em] block mb-2">
+                      Laboratory Consensus:
+                    </span>
+                    <h3 className={`text-xl font-bold italic leading-tight mb-2 uppercase break-words ${result.prediction.includes('Healthy') ? 'text-white' : 'text-neon-yellow'}`}>
+                      {result.prediction}
                     </h3>
-                    <div className="flex items-center justify-center gap-4 px-4">
+                    <div className="flex items-center gap-4 border-t border-white/5 pt-4">
                        <div className="h-1 flex-1 bg-white/5 rounded-full overflow-hidden">
                           <motion.div 
                             initial={{ width: 0 }} 

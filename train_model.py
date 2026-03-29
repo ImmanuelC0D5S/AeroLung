@@ -2,19 +2,14 @@ import os
 import numpy as np
 import joblib
 import librosa
-from src.dsp_engine import (
-    apply_bandpass_filter, 
-    apply_notch_filter, 
-    simulate_quantization, 
-    load_audio
-)
+from src.dsp_engine import apply_bandpass_filter, load_audio
 from src.ml_logic import extract_mfcc_features, LungClassifier
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score, f1_score, classification_report
 from collections import Counter
 
 # Configuration
-DATA_DIR = "data"
+DATA_DIR = r"data\mendeley_converted"
 MODEL_PATH = "models/lung_model.joblib"
 
 def parse_annotation(txt_path):
@@ -85,18 +80,9 @@ def prepare_dataset():
             continue
             
         try:
-            # Load and preprocess using Lab Syllabus logic (Sync with Inference)
+            # Load and preprocess full audio once for efficiency
             data, fs = load_audio(wav_path)
-            
-            # 1. [EXP 5] Notch Filter (50Hz hum)
-            notched_data = apply_notch_filter(data, fs, freq=50.0)
-            
-            # 2. [EXP 6/4] Bandpass Filter (200-2000Hz)
-            filtered_data = apply_bandpass_filter(notched_data, fs)
-            
-            # 3. [EXP 7] Quantization Simulation (Hardware bottleneck)
-            # Training on 16-bit to match standard high-quality acquisition
-            quantized_data = simulate_quantization(filtered_data, bits=16)
+            filtered_data = apply_bandpass_filter(data, fs)
             
             for start, end, c, w in cycles:
                 # 1. Segment Audio based on timestamps
@@ -108,16 +94,16 @@ def prepare_dataset():
                     continue
                     
                 # Handle edge cases for end_idx
-                if end_idx > len(quantized_data):
-                    end_idx = len(quantized_data)
+                if end_idx > len(filtered_data):
+                    end_idx = len(filtered_data)
                     
-                segment = quantized_data[start_idx:end_idx]
+                segment = filtered_data[start_idx:end_idx]
                 
                 if len(segment) == 0:
                     continue
                 
-                # 2. Extract 53 Enhanced Features (from ml_logic)
-                features = extract_mfcc_features(segment, fs)
+                # 2. Extract Enhanced Features
+                features = extract_mfcc_features(segment, fs, is_clinical=True)
                 
                 # 3. Assign Label
                 label = get_label(c, w)

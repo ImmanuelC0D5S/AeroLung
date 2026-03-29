@@ -20,17 +20,37 @@ def detect_crackles_rms(data, frame_length=2048, hop_length=512, threshold=0.1):
     anomalies = np.where(rms > (np.mean(rms) + threshold * np.std(rms)))[0]
     return rms, anomalies
 
-def extract_mfcc_features(data, fs, n_mfcc=13):
+def preprocess_clinical_signal(data, fs, is_clinical=True):
+    """
+    # [CONDITIONAL PRE-PROCESSING]
+    Ensures 'Best of Both Worlds' for signal features.
+    - is_clinical=True: Preserves raw high-fidelity clinical markers (ICBHI).
+    - is_clinical=False: Applies robust Notch/Bandpass filtering for field recordings.
+    """
+    if is_clinical:
+        return data
+        
+    # Field recordings (Mic/Mobiles) need noise resilience
+    from src.dsp_engine import apply_notch_filter, apply_bandpass_filter
+    data = apply_notch_filter(data, fs, freq=50.0)
+    data = apply_bandpass_filter(data, fs, lowcut=200, highcut=2000)
+    return data
+
+def extract_mfcc_features(data, fs, n_mfcc=13, is_clinical=True):
     """
     # TECHNICAL REQUIREMENT 3/4 [ENHANCED]
-    Extract 53 features for higher precision:
+    Extract 54 features for higher precision:
     - 13 MFCC Mean
     - 13 MFCC Std
     - 13 Delta MFCC Mean
     - 1 Spectral Centroid
     - 1 Zero Crossing Rate
-    - 12 Chromagram Mean (additional spectral texture)
+    - 12 Chromagram Mean
+    - 1 Sub-band Power Ratio (COPD Index)
     """
+    # [NEW] Pre-process based on clinical context
+    data = preprocess_clinical_signal(data, fs, is_clinical=is_clinical)
+    
     # 1. MFCCs
     n_samples = len(data)
     n_fft = min(n_samples, 2048)
@@ -64,13 +84,17 @@ def extract_mfcc_features(data, fs, n_mfcc=13):
     chroma = librosa.feature.chroma_stft(y=data, sr=fs, n_fft=n_fft, hop_length=hop_length)
     chroma_mean = np.mean(chroma, axis=1)
     
-    # Combine into a single 52-dimensional feature vector
+    # Combine into a single 54-dimensional feature vector
+    from src.dsp_engine import calculate_subband_ratio
+    subband_ratio = calculate_subband_ratio(data, fs)
+    
     features = np.concatenate([
         mfcc_mean, 
         mfcc_std, 
         delta_mean, 
         [centroid_mean, zcr_mean], 
-        chroma_mean
+        chroma_mean,
+        [subband_ratio] # 54th Feature: COPD Index
     ])
     return features
 
@@ -80,7 +104,9 @@ class LungClassifier:
     Will be trained once real data is available.
     """
     def __init__(self):
-        self.model = RandomForestClassifier(n_estimators=100, class_weight='balanced', random_state=42)
+        # [UPGRADED] n_estimators=200 + class_weight='balanced' for Clinical Resilience
+        self.model = RandomForestClassifier(n_estimators=200, class_weight='balanced', random_state=42)
+        self.sensitivity_threshold_c2 = 0.35 # Clinical Guard for Recall
         self.is_trained = False
 
     def train(self, X, y):
@@ -106,19 +132,30 @@ class LungClassifier:
     def predict(self, features):
         """
         Predict specific lung condition and return the most likely label.
+        [CLINICAL MODE]: Priority: Class 2 (Crackle) @ 35% Sensitivity.
         """
         if not self.is_trained:
             return "UNTRAINED"
         
-        prediction = self.model.predict(features.reshape(1, -1))
+        # Get probabilities to apply clinical thresholding
+        probas = self.model.predict_proba(features.reshape(1, -1))[0]
+        
+        # 1. Check for Class 2 (Crackle) or Class 3 (Both) priority
+        # If either crackle component (2 or 3) is above threshold, prioritize it
+        if probas[2] > self.sensitivity_threshold_c2:
+            prediction = [2]
+        else:
+            prediction = self.model.predict(features.reshape(1, -1))
         
         label_map = {
             0: 'Condition: Healthy (Normal)',
-            1: 'Diagnosis: Asthma (Wheezing)',
-            2: 'Diagnosis: Pneumonia/COPD (Crackles)',
-            3: 'Diagnosis: COPD (Mixed Symptoms)'
+            1: 'Condition: Asthma (Wheezing)',
+            2: 'Condition: Pneumonia/COPD (Cracks/Crackles)',
+            3: 'Condition: Chronic (Wheeze & Crackle)'
         }
-        return label_map.get(prediction[0], "Unknown")
+        
+        status = label_map.get(prediction[0], 'Condition: Unknown Anomaly')
+        return status
 
     def predict_proba(self, features):
         """

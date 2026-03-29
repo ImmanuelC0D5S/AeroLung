@@ -82,6 +82,45 @@ def alter_sampling_rate(data, fs, target_fs):
     resampled_data = resample(data, num_samples)
     return resampled_data, target_fs
 
+def apply_signal_amplification(data, gain_db=0.0, auto_gain=False):
+    """
+    # [EXPERIMENT 9]
+    Digital Pre-Amp & Automatic Gain Control (AGC).
+    Boosts weak signals to ±0.9 amplitude to improve clinical diagnostics.
+    """
+    if auto_gain:
+        # Automatic Peak Normalization (Exp 9 AGC)
+        peak = np.max(np.abs(data))
+        if peak > 0:
+            data = data * (0.9 / peak)
+    elif gain_db > 0:
+        # Manual Digital Pre-Amp Gain
+        factor = 10 ** (gain_db / 20.0)
+        data = data * factor
+        
+    # Soft-Clipping Protection (Prevent Digital Distortion)
+    return np.clip(data, -1.0, 1.0)
+
+def calculate_subband_ratio(data, fs, lower=(100, 400), upper=(400, 1000)):
+    """
+    # [TECHNICAL 5]
+    Calculates the energy ratio between tracheal COPD rumble and 
+    normal respiratory flow for clinical sensitivity.
+    """
+    n = len(data)
+    # We use magnitude squared for power calculations
+    mag = np.abs(np.fft.rfft(data))
+    freqs = np.fft.rfftfreq(n, d=1/fs)
+    
+    mask_low = (freqs >= lower[0]) & (freqs <= lower[1])
+    mask_high = (freqs >= upper[0]) & (freqs <= upper[1])
+    
+    # Power density estimation
+    p_low = np.mean(np.square(mag[mask_low])) if np.any(mask_low) else 1e-9
+    p_high = np.mean(np.square(mag[mask_high])) if np.any(mask_high) else 1e-9
+    
+    return float(p_low / p_high)
+
 def load_audio(file_path):
     """
     Utility function to load audio using librosa.

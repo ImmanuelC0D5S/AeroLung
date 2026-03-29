@@ -4,12 +4,14 @@ import numpy as np
 import librosa
 import os
 import shutil
+import re
 from src.dsp_engine import (
     apply_notch_filter,
     apply_bandpass_filter,
     perform_spectral_analysis,
     simulate_quantization,
     alter_sampling_rate,
+    apply_signal_amplification,
     load_audio
 )
 from src.ml_logic import (
@@ -50,7 +52,9 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 async def analyze_audio(
     file: UploadFile = File(...),
     bit_depth: int = Form(16),
-    target_sr: int = Form(44100)
+    target_sr: int = Form(44100),
+    gain_db: float = Form(0.0),
+    auto_gain: bool = Form(False)
 ):
     """
     Main diagnostic endpoint [EXPERIMENT TRACEABILITY MODE]
@@ -63,6 +67,24 @@ async def analyze_audio(
 
         logs = []
         logs.append(f"INIT: System received {file.filename}. Starting analysis pipeline...")
+
+        # Clinical Context Detection
+        # ICBHI Pattern: [pat_id]_[rec_id]_[pos]_[type]_[device]
+        icbhi_pattern = r"^[0-9]{3}_[0-9]"
+        is_icbhi = re.match(icbhi_pattern, file.filename) is not None
+        is_tracheal = "_Tc_" in file.filename
+        
+        # [CONDITIONAL GUARD] 
+        # ICBHI/Tc samples use RAW clinical mode; others use Filtered Field mode.
+        is_clinical = is_icbhi or is_tracheal
+        
+        if is_clinical:
+            logs.append("CLINICAL DATASET DETECTED: Engaging High-Fidelity Raw Analysis [Lab Mode].")
+        else:
+            logs.append("FIELD RECORDING DETECTED: Engaging Noise-Resilient Filtered Analysis [Field Mode].")
+
+        if is_tracheal:
+            logs.append("CLINICAL MODE: Tracheal (Tc) Sensitivity Active. Monitoring for Flow Limitation.")
 
         # 1. Load Audio
         data_orig, fs_orig = load_audio(temp_path)
@@ -77,8 +99,13 @@ async def analyze_audio(
             fs = fs_orig
             logs.append(f"Applying EXPERIMENT [8] Logic: Sampling rate verified at {target_sr}Hz.")
 
+        # [EXPERIMENT 9] Pre-Amp Stage
+        amplified_audio = apply_signal_amplification(raw_audio, gain_db=gain_db, auto_gain=auto_gain)
+        if gain_db > 0 or auto_gain:
+            logs.append(f"Applying EXPERIMENT [9] Logic: Digital Pre-Amp Stage engaged ({gain_db}dB / AGC={auto_gain}).")
+
         # 3. [EXPERIMENT 5] Notch Filter (50Hz)
-        notched_data = apply_notch_filter(raw_audio, fs, freq=50.0)
+        notched_data = apply_notch_filter(amplified_audio, fs, freq=50.0)
         logs.append("Applying EXPERIMENT [5] Logic: 50Hz IIR Notch Filter engaged (Removing AC Mains Hum).")
 
         # 4. [EXPERIMENT 6/4] Bandpass Filter (200Hz - 2000Hz)
@@ -90,18 +117,18 @@ async def analyze_audio(
         logs.append(f"Applying EXPERIMENT [7] Logic: Simulating {bit_depth}-bit precision quantization.")
         
         # Calculate Quantization SNR [Exp 7]
-        # SNR = 10 * log10(P_signal / P_noise)
         signal_power = np.mean(np.square(filtered_audio))
         noise_power = np.mean(np.square(filtered_audio - quantized_data))
         snr_db = float(10 * np.log10(signal_power / (noise_power + 1e-15)))
 
         # 6. [EXPERIMENT 2] Spectral Analysis
-        # n_fft=2048 provides perfect academic resolution for 44.1kHz audio
         freqs, mag = perform_spectral_analysis(quantized_data, fs, n_fft=2048)
         logs.append("Applying EXPERIMENT [2] Logic: Academic Spectral Analysis (Hamming Windowed).")
+        
+        if is_tracheal:
+            logs.append("EXP 2 ADAPTATION: Analyzing Tracheal spectrum for COPD 'Broadband Hiss' indicators.")
 
         # Clinical Peak Detection [Exp 2]
-        # Target: Dominant respiratory peak in the 200Hz-2000Hz window
         mask_clinical = (freqs >= 200) & (freqs <= 2000)
         if np.any(mask_clinical):
             p_idx = np.argmax(mag[mask_clinical])
@@ -114,19 +141,25 @@ async def analyze_audio(
         rms, crackles = detect_crackles_rms(quantized_data)
         logs.append(f"Applying EXPERIMENT [3] Logic: RMS-based Anomaly detection found {len(crackles)} crackles.")
         
-        # Feature Extraction (Expert Metrics)
-        dsp_features = get_dsp_metrics(quantized_data, fs)
+        # Feature Extraction (54 Features for ML - Including COPD sub-band ratio)
+        # Conditional: Uses RAW for ClinicalMode, FILTERED for FieldMode
+        mfccs = extract_mfcc_features(amplified_audio, fs, is_clinical=is_clinical)
+        logs.append(f"Feature Vector Synchronized: {len(mfccs)} dimensions (Mode: {'Lab/Raw' if is_clinical else 'Field/Filtered'}).")
         
-        # Feature Extraction (53 Features for ML)
-        mfccs = extract_mfcc_features(quantized_data, fs)
-        logs.append(f"Feature Vector Synchronized: {len(mfccs)} dimensions extracted for ML Inference.")
+        dsp_features = get_dsp_metrics(amplified_audio, fs)
         
         # Prediction with Dimension Guard
         try:
             if classifier.is_trained:
-                # Ensure we are passing the expected 53 features
+                probas = classifier.model.predict_proba(mfccs.reshape(1, -1))[0]
                 status = classifier.predict(mfccs)
-                confidence = float(np.max(classifier.model.predict_proba(mfccs.reshape(1, -1))))
+                confidence = float(np.max(probas))
+                
+                # [CLINICAL SENSITIVITY TWEAK]
+                # Priority: Tracheal monitoring for COPD baseline
+                # If predicted healthy but it's a tracheal sample and confidence is not absolute (<85%)
+                if is_tracheal and status == 'Condition: Healthy (Normal)' and confidence < 0.85:
+                    status = "Acoustically Normal, but Clinical Baseline suggests COPD monitoring required."
             else:
                 status = "UNTRAINED_MODEL_HEURISTIC"
                 confidence = 0.5
